@@ -1,14 +1,9 @@
 // ============================================================
-// Aura PCs — Review Approval Bot
+// Aura PCs — Review Approval Bot (debug version)
 //
-// What this does: watches the Discord channel where review submissions land.
-// - React with ✅ to approve a review, it goes live on the site automatically.
-// - React with 🗑️ to permanently delete a review, whether pending or live.
-//
-// The bot reads the review's own ID directly out of the Discord message's
-// embed footer (put there by the website), so it never needs to look anything
-// up in the database first — avoids an RLS edge case where pending rows
-// aren't visible to the public API.
+// Temporarily includes extra console.log lines so we can see exactly what
+// the bot receives when you react. Once everything's confirmed working,
+// these can be removed (not required, just noisy in the logs long-term).
 // ============================================================
 
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
@@ -41,27 +36,57 @@ client.once('ready', () => {
 });
 
 client.on('messageReactionAdd', async (reaction, user) => {
+  console.log("=== Reaction event received ===");
+  console.log("User:", user.tag, user.id, "Bot?", user.bot);
+  console.log("Emoji:", reaction.emoji.name);
+
   try {
-    if (user.bot) return;
-    if (!OWNER_USER_IDS.includes(user.id)) return;
+    if (user.bot) {
+      console.log("Ignoring: reaction came from a bot.");
+      return;
+    }
+
+    if (!OWNER_USER_IDS.includes(user.id)) {
+      console.log("Ignoring: user id not in OWNER_USER_IDS list:", OWNER_USER_IDS);
+      return;
+    }
 
     if (reaction.partial) {
+      console.log("Reaction was partial, fetching full data...");
       await reaction.fetch();
     }
     if (reaction.message.partial) {
+      console.log("Message was partial, fetching full data...");
       await reaction.message.fetch();
     }
 
     const emojiName = reaction.emoji.name;
-    if (emojiName !== '✅' && emojiName !== '🗑️') return;
+    if (emojiName !== '✅' && emojiName !== '🗑️') {
+      console.log("Ignoring: emoji is not ✅ or 🗑️, it's:", emojiName);
+      return;
+    }
 
     const embed = reaction.message.embeds[0];
-    if (!embed || !embed.footer || !embed.footer.text) return;
+    console.log("Embeds on this message:", reaction.message.embeds.length);
+    if (!embed) {
+      console.log("Ignoring: no embed found on this message.");
+      return;
+    }
+    console.log("Embed footer:", embed.footer);
+    if (!embed.footer || !embed.footer.text) {
+      console.log("Ignoring: embed has no footer text.");
+      return;
+    }
 
     const match = embed.footer.text.match(/Review ID: ([a-f0-9-]+)/i);
-    if (!match) return;
+    console.log("Footer text was:", embed.footer.text, "| Regex match:", match);
+    if (!match) {
+      console.log("Ignoring: footer text didn't match the expected 'Review ID: ...' pattern.");
+      return;
+    }
 
     const reviewId = match[1];
+    console.log("Parsed review id:", reviewId);
 
     const { data: matches, error: findError } = await supabase
       .from('reviews')
@@ -69,16 +94,24 @@ client.on('messageReactionAdd', async (reaction, user) => {
       .eq('id', reviewId)
       .limit(1);
 
+    console.log("Supabase lookup result:", matches, findError);
+
     if (findError) {
       console.error("Error looking up review:", findError.message);
       return;
     }
-    if (!matches || matches.length === 0) return;
+    if (!matches || matches.length === 0) {
+      console.log("Ignoring: no review found in database with that id.");
+      return;
+    }
 
     const review = matches[0];
 
     if (emojiName === '✅') {
-      if (review.approved) return;
+      if (review.approved) {
+        console.log("Already approved, nothing to do.");
+        return;
+      }
 
       const { error: updateError } = await supabase
         .from('reviews')

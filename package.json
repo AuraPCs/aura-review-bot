@@ -1,0 +1,16 @@
+{
+  "name": "aura-pcs-review-bot",
+  "version": "1.0.0",
+  "description": "Approves customer reviews for Aura PCs when an owner reacts with a checkmark on Discord",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "@supabase/supabase-js": "^2.45.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

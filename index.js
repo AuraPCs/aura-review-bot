@@ -3,19 +3,20 @@
 //
 // What this does: watches the Discord channel where review submissions land.
 // - React with ✅ to approve a review, it goes live on the site automatically.
-// - React with 🗑️ to permanently delete a review, whether it's pending or
-//   already live, it's removed from the database entirely (not recoverable).
+// - React with 🗑️ to permanently delete a review, whether pending or live.
 //
-// You do NOT need to know how to code to run this. Just follow SETUP.md.
+// The bot reads the review's own ID directly out of the Discord message's
+// embed footer (put there by the website), so it never needs to look anything
+// up in the database first — avoids an RLS edge case where pending rows
+// aren't visible to the public API.
 // ============================================================
 
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { createClient } = require('@supabase/supabase-js');
 
-// ---- Config (set these as environment variables wherever you host this) ----
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY; // NOT the anon key, the secret one
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const OWNER_USER_IDS = (process.env.OWNER_USER_IDS || "632797378147254283,804723860717043822").split(",");
 
 if (!DISCORD_BOT_TOKEN || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -42,41 +43,42 @@ client.once('ready', () => {
 client.on('messageReactionAdd', async (reaction, user) => {
   try {
     if (user.bot) return;
-
-    // Only these two people can approve or delete reviews
     if (!OWNER_USER_IDS.includes(user.id)) return;
 
-    // Handle partial reactions (Discord doesn't always send full data)
     if (reaction.partial) {
       await reaction.fetch();
     }
+    if (reaction.message.partial) {
+      await reaction.message.fetch();
+    }
 
-    const messageId = reaction.message.id;
     const emojiName = reaction.emoji.name;
-
     if (emojiName !== '✅' && emojiName !== '🗑️') return;
 
-    // Find the review tied to this Discord message
+    const embed = reaction.message.embeds[0];
+    if (!embed || !embed.footer || !embed.footer.text) return;
+
+    const match = embed.footer.text.match(/Review ID: ([a-f0-9-]+)/i);
+    if (!match) return;
+
+    const reviewId = match[1];
+
     const { data: matches, error: findError } = await supabase
       .from('reviews')
       .select('id, approved, name')
-      .eq('discord_message_id', messageId)
+      .eq('id', reviewId)
       .limit(1);
 
     if (findError) {
       console.error("Error looking up review:", findError.message);
       return;
     }
-
-    if (!matches || matches.length === 0) {
-      // This message isn't a tracked review, ignore silently
-      return;
-    }
+    if (!matches || matches.length === 0) return;
 
     const review = matches[0];
 
     if (emojiName === '✅') {
-      if (review.approved) return; // already approved, nothing to do
+      if (review.approved) return;
 
       const { error: updateError } = await supabase
         .from('reviews')
@@ -110,7 +112,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
       console.log(`Deleted review from ${review.name} (id: ${review.id})`);
       try {
-        await reaction.message.reply(`🗑️ Deleted by ${user.username}. This review has been permanently removed, including from the site if it was already live.`);
+        await reaction.message.reply(`🗑️ Deleted by ${user.username}. This review has been permanently removed.`);
       } catch (replyErr) {
         console.warn("Couldn't post confirmation reply:", replyErr.message);
       }

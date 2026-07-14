@@ -2,9 +2,9 @@
 // Aura PCs — Review Approval Bot
 //
 // What this does: watches the Discord channel where review submissions land.
-// When you (or the other owner) react with ✅ on a review message, the bot
-// flips that review's "approved" flag to true in Supabase. The website then
-// picks it up automatically on next page load, no code changes needed per review.
+// - React with ✅ to approve a review, it goes live on the site automatically.
+// - React with 🗑️ to permanently delete a review, whether it's pending or
+//   already live, it's removed from the database entirely (not recoverable).
 //
 // You do NOT need to know how to code to run this. Just follow SETUP.md.
 // ============================================================
@@ -43,11 +43,8 @@ client.on('messageReactionAdd', async (reaction, user) => {
   try {
     if (user.bot) return;
 
-    // Only these two people can approve reviews
+    // Only these two people can approve or delete reviews
     if (!OWNER_USER_IDS.includes(user.id)) return;
-
-    // Only the checkmark emoji counts as approval
-    if (reaction.emoji.name !== '✅') return;
 
     // Handle partial reactions (Discord doesn't always send full data)
     if (reaction.partial) {
@@ -55,8 +52,11 @@ client.on('messageReactionAdd', async (reaction, user) => {
     }
 
     const messageId = reaction.message.id;
+    const emojiName = reaction.emoji.name;
 
-    // Find the pending review tied to this Discord message
+    if (emojiName !== '✅' && emojiName !== '🗑️') return;
+
+    // Find the review tied to this Discord message
     const { data: matches, error: findError } = await supabase
       .from('reviews')
       .select('id, approved, name')
@@ -75,29 +75,46 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
     const review = matches[0];
 
-    if (review.approved) {
-      // Already approved, nothing to do
+    if (emojiName === '✅') {
+      if (review.approved) return; // already approved, nothing to do
+
+      const { error: updateError } = await supabase
+        .from('reviews')
+        .update({ approved: true })
+        .eq('id', review.id);
+
+      if (updateError) {
+        console.error("Error approving review:", updateError.message);
+        return;
+      }
+
+      console.log(`Approved review from ${review.name} (id: ${review.id})`);
+      try {
+        await reaction.message.reply(`✅ Approved by ${user.username}. This review is now live on the site.`);
+      } catch (replyErr) {
+        console.warn("Couldn't post confirmation reply:", replyErr.message);
+      }
       return;
     }
 
-    const { error: updateError } = await supabase
-      .from('reviews')
-      .update({ approved: true })
-      .eq('id', review.id);
+    if (emojiName === '🗑️') {
+      const { error: deleteError } = await supabase
+        .from('reviews')
+        .delete()
+        .eq('id', review.id);
 
-    if (updateError) {
-      console.error("Error approving review:", updateError.message);
+      if (deleteError) {
+        console.error("Error deleting review:", deleteError.message);
+        return;
+      }
+
+      console.log(`Deleted review from ${review.name} (id: ${review.id})`);
+      try {
+        await reaction.message.reply(`🗑️ Deleted by ${user.username}. This review has been permanently removed, including from the site if it was already live.`);
+      } catch (replyErr) {
+        console.warn("Couldn't post confirmation reply:", replyErr.message);
+      }
       return;
-    }
-
-    console.log(`Approved review from ${review.name} (id: ${review.id})`);
-
-    // Let the channel know it worked
-    try {
-      await reaction.message.reply(`✅ Approved by ${user.username}. This review is now live on the site.`);
-    } catch (replyErr) {
-      // Non-critical if this fails, the approval itself already succeeded
-      console.warn("Couldn't post confirmation reply:", replyErr.message);
     }
 
   } catch (err) {
